@@ -8,7 +8,7 @@ defmodule Crossover.MarvelAPITest do
   end
 
   test "Gets an item from state." do
-  	item = find_hero("Thor", [%{name: "Thor"}])
+  	item = find_hero([%{name: "Thor"}, "Thor"])
   	assert %{name: "Thor"} == item
   end
 end
