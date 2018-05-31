@@ -4,66 +4,81 @@ defmodule Crossover.MarvelAPI do
 
 	@endpoint "http://gateway.marvel.com"
 
-	# Client functions
+	# Interface functions
+	def get_series_with(characters) do
+		{:ok, pid} = start_genserver()
+		# loop over each character name, put their ids in the state
+		
+		# get series with their ids
+		
 
-	def start_link(opts \\ []) do 
+		# kill server once this job is completed
+		# stop(pid)
+
+		# return series
+	end
+
+	# Client functions
+	defp start_genserver(opts \\ []) do 
 		GenServer.start_link(__MODULE__, :ok, opts)
 	end
-
-	def add_char(pid, char_name) do
-		GenServer.call(pid, {:add, char_name})
-	end
-
-	def get_char(pid, char_name) do
-		GenServer.call(pid, {:get, char_name}, 1000000)
-	end
-
-	# server functions
 	
+	def get_character_from_state(pid, character_name) do
+		GenServer.call(pid, {:get, character_name})
+	end
+	
+	defp add_character_to_state(pid, character_name) do
+		GenServer.cast(pid, {:add, character_name})
+	end
+	
+	# GenServer callbacks
 	def init(args) do
 		{:ok, args}
 	end
+	
+	def handle_cast({:add, character_name}, _from, state) do
+		response_from_marvel = get_character_from_api(character_name)
+		
+		case response_from_marvel do
+			{:ok, %HTTPoison.Response{body: character}} -> 
+				updated_state = character 
+				|> parse_character_from_json 
+				|> prepend_item_to_state(state)
 
+				{:noreply, updated_state}
+			
+			{:error, reason} ->
+				{:error, reason}
+		end
+
+	end
+
+	def handle_call({:get, character_name}, _from, state) do
+		state |> Enum.find(fn(character) -> character[:name] == character_name end)
+	end
+
+	# HTTPoison callbacks
 	def process_url(url) do
 		@endpoint <> url
 	end
-	
-	def handle_call({:add, char_name}, _from, state) do
-		# @TODO get the char from Marvel API, and add the top level + series.
-		case find_char(char_name) do
-			{:ok, char_info} ->
-				new_state = update_state(state, char_info)
-				{:reply, char_info, new_state}
-			{:error, reason} ->
-				{:reply, reason, state}
-		end
+
+	# API functions
+	def get_character_from_api(character_name) do
+		get("/v1/public/characters?name=#{character_name}&" <> make_auth_signature())
 	end
 
-	def handle_call({:get, char_name}, _from, state) do
-		state |> Enum.find(fn(char) -> char[:name] == char_name end)
+	def get_series_with_characters_from_api(character_ids) do
+		joined_list = character_ids |> Enum.join(",")
+		get("/v1/public/series?characters=#{joined_list}&" <> make_auth_signature())
 	end
 
-	defp find_char(char_name) do
-		IO.puts @endpoint <> "/v1/public/characters?name=#{char_name}&" <> make_auth_signature()
-		case get("/v1/public/characters?name=#{char_name}&" <> make_auth_signature()) do
-			{:ok, %HTTPoison.Response{body: char_info}} -> 
-				decode_char_info(char_info)
-			{:error, reason} ->
-				{:error, reason}
-		end	
+	# helper functions
+	defp parse_character_from_json(character) do
+		{:ok, JSON.decode(character)}
 	end
 
-	defp decode_char_info(char_info) do
-		try do
-			{:ok, JSON.decode(char_info)}
-		rescue
-			_ ->
-				{:error, "Couldn't decode JSON."}
-		end
-	end
-
-	defp update_state(state, char_info) do
-		[ char_info | state ]
+	def prepend_item_to_state(item, state) do
+		[ item | state ]
 	end
 
 	defp make_auth_signature do
@@ -71,6 +86,7 @@ defmodule Crossover.MarvelAPI do
 		api_key = Application.fetch_env!(:crossover, :api_key)
 		secret_key = Application.fetch_env!(:crossover, :secret_key)
 		hash = :crypto.hash(:md5, time_stamp <> secret_key <> api_key) |> Base.encode16(case: :lower)
+		
 		"ts=#{URI.encode(time_stamp)}&apikey=#{api_key}&hash=#{hash}"
 	end
 end
