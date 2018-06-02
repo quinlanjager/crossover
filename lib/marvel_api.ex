@@ -8,18 +8,10 @@ defmodule Crossover.MarvelAPI do
   def get_series_with(characters) do
     {:ok, pid} = start_genserver()
     # loop over each character name, put their ids in the state
-    character_ids = characters |> Enum.map(fn(character) -> get_character_id(pid, character) end)
-    character_ids |> Enum.join(",")
-    # series
-    # |> JSON.decode
-    # |> Enum.reduce
+    character_ids = characters 
+    	|> Enum.map(fn(character) -> get_character_id(pid, character) end) 
+    	|> Enum.join(",")
     
-    # get series with their ids
-
-    # kill server once this job is completed
-    # stop(pid)
-
-    # return series
   end
 
   # Client functions
