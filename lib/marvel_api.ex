@@ -3,15 +3,17 @@ defmodule Crossover.MarvelAPI do
   use HTTPoison.Base
 
   @endpoint "http://gateway.marvel.com"
+  @timeout 20000
 
   # Interface functions
-  def get_series_with(characters) do
+  # @TODO use multiple processes to asynchronously get character information
+  def get_series_with(character_names) do
     {:ok, pid} = start_genserver()
-    # loop over each character name, put their ids in the state
-    character_ids = characters 
-    	|> Enum.map(fn(character) -> get_character_id(pid, character) end) 
-    	|> Enum.join(",")
-    
+
+    character_ids = character_names |> Enum.map(fn(character) -> get_character_id(pid, character) end) 
+    IO.puts get_series_names(pid, character_ids) |> Enum.join("\n")
+    GenServer.stop(pid)
+    :ok
   end
 
   # Client functions
@@ -20,7 +22,30 @@ defmodule Crossover.MarvelAPI do
   end
 
   def get_character_id(pid, character_name) do
-    GenServer.call(pid, {:get, character_name})
+    encoded_character_name = URI.encode(character_name)
+    endpoint = "/v1/public/characters?name=#{encoded_character_name}&" <> make_auth_signature()
+    response_from_marvel = GenServer.call(pid, {:get, endpoint})
+
+    case response_from_marvel do
+      {:ok, %HTTPoison.Response{body: response_body}} ->
+        response_body |> fetch_character_id_from_body
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  def get_series_names(pid, character_ids) do
+    joined_list = character_ids |> Enum.join(",")
+    endpoint = "/v1/public/series?characters=#{joined_list}&" <> make_auth_signature()
+    
+    response_from_marvel = GenServer.call(pid, {:get, endpoint }, @timeout)
+
+    case response_from_marvel do
+      {:ok, %HTTPoison.Response{body: response_body}} ->
+        response_body |> map_series_names
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   # GenServer callbacks
@@ -28,18 +53,9 @@ defmodule Crossover.MarvelAPI do
     {:ok, args}
   end
 
-  def handle_call({:get, character_name}, _from, state) do
-    response_from_marvel = get_character_from_api(character_name)
-
-    case response_from_marvel do
-      {:ok, %HTTPoison.Response{status_code: 200, body: response_from_marvel}} ->
-        character_id = response_from_marvel |> filter_character_id
-        new_state = [character_id | state]
-        {:reply, character_id, new_state}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
+  def handle_call({:get, endpoint}, _from, state) do
+    response = get(endpoint, [], [recv_timeout: @timeout])
+    {:reply, response, state}
   end
 
   # HTTPoison callbacks
@@ -47,22 +63,21 @@ defmodule Crossover.MarvelAPI do
     @endpoint <> url
   end
 
-  # API functions
-  def get_character_from_api(character_name) do
-    get("/v1/public/characters?name=#{character_name}&" <> make_auth_signature())
-  end
-
-  def get_series_with_characters_from_api(character_ids) do
-    joined_list = character_ids |> Enum.join(",")
-    get("/v1/public/series?characters=#{joined_list}&" <> make_auth_signature())
-  end
-
   # helper functions
   
-  defp filter_character_id(response_from_marvel) do
+  defp fetch_character_id_from_body(response_from_marvel) do
     {:ok, character_info} = JSON.decode(response_from_marvel)
-   	{:ok, first_character_result} = character_info["data"]["results"] |> Enum.fetch(0)
-   	first_character_result["id"]
+    case character_info["data"]["results"] |> Enum.fetch(0) do
+      {:ok, first_character_result} ->
+        first_character_result["id"]
+      :error ->
+        ""
+    end
+  end
+
+  defp map_series_names(response_from_marvel) do
+    {:ok, series_info} = JSON.decode(response_from_marvel) 
+    series_info["data"]["results"] |> Enum.map(fn(series) -> series["title"] end)
   end
 
   defp make_auth_signature do
@@ -70,7 +85,7 @@ defmodule Crossover.MarvelAPI do
     api_key = Application.fetch_env!(:crossover, :api_key)
     secret_key = Application.fetch_env!(:crossover, :secret_key)
     hash = :crypto.hash(:md5, time_stamp <> secret_key <> api_key) |> Base.encode16(case: :lower)
-
+    
     "ts=#{URI.encode(time_stamp)}&apikey=#{api_key}&hash=#{hash}"
   end
 end
